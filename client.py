@@ -1,25 +1,33 @@
 import socket
 import threading
-from sending import *
+from sending import send, recv
+from sending import client as new_client
 
 standard_address = "127.0.0.1 : 5050"
 
 
 def receive_routine(client):
+
     while True:
         try:
             message = recv(client)
             print(message)
         except:
             print("Error. Client shutting down...")
-            client.close()
+            print("Press Enter to escape")
+            client.socket.close()
             break
 
 
 def sending_routine(client):
-    while True:
-        msg = input()
-        send(client, msg)
+
+    try:
+        while True:
+            msg = input()
+            send(client, msg)
+    except:
+        client.socket.close()
+        return
 
 
 def start():
@@ -45,6 +53,8 @@ def start():
             break
         except Exception as inst:
             print(inst)
+
+    client = new_client(client)
 
     receive_thread = threading.Thread(target=receive_routine, args=(client,))
     receive_thread.start()

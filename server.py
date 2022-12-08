@@ -1,69 +1,85 @@
 import threading
 import socket
-from sending import *
+
+from sending import send, recv
+from sending import client as new_client
 
 nick_len = 16
 standard_address = "127.0.0.1 : 5050"
 
 clients_lock = threading.Lock()
-clients = set()
-nicknames = set()
+clients = dict()
+
+output_lock = threading.Lock()
 
 
-def send_all(msg):
+def print_info(msg, client=None):
+
+    if client is None:
+        with output_lock:
+            print(msg)
+    else:
+        with output_lock:
+            print(f'"{client.address}" {client.nick}'.ljust(nick_len + 20) + f": {msg}")
+
+
+def send_all(msg, client=None):
+
+    if client is not None:
+        msg = f"{client.nick}: {msg}"
     with clients_lock:
-        for client in clients:
-            send(client, msg)
+        receivers = list(clients.values())
+    for client in receivers:
+        send(client, msg)
 
 
-def leave_chat_routine(client, address, nick):
+def leave_chat_routine(client):
 
     send(client, "You left the chat...")
 
     with clients_lock:
-        clients.remove(client)
-        nicknames.remove(nick)
+        del clients[client.nick]
 
-    send_all(f"{nick.strip()} left the chat")
+    send_all(f"{client.nick.strip()} left the chat")
 
-    client.close()
+    client.socket.close()
 
-    print(f'"{address}" {nick}: left')
+    print_info("left", client)
     return 0
 
 
-def disconnected_routine(client, address, nick):
+def disconnected_routine(client):
 
     with clients_lock:
-        clients.remove(client)
-        nicknames.remove(nick)
+        del clients[client.nick]
 
-    send_all(f"{nick.strip()} disconnected")
+    send_all(f"{client.nick.strip()} disconnected")
 
-    client.close()
+    client.socket.close()
 
-    print(f'"{address}" {nick}: disconnected')
+    print_info("disconnected", client)
 
     return 1
 
 
-def handle(client, address, nick):
+def handle(client):
 
     while True:
         try:
             msg = recv(client)
 
             if msg.strip() == "!exit":
-                return leave_chat_routine(client, address, nick)
+                return leave_chat_routine(client)
 
-            send_all(f"{nick}: {msg}")
+            send_all(msg, client)
 
         except:
-            return disconnected_routine(client, address, nick)
+            return disconnected_routine(client)
 
 
-def join_routine(client, address):
+def join_routine(client):
 
+    nick = None
     try:
         send(client, f"You successfully connected to chat server!")
         while True:
@@ -81,31 +97,36 @@ def join_routine(client, address):
             nick = nick.ljust(nick_len)
 
             with clients_lock:
-                if nick not in nicknames:
-                    clients.add(client)
-                    nicknames.add(nick)
+                if nick not in clients:
+                    clients[nick] = client
                     break
 
             send(client, "This nickname already in use")
 
-        print(f'"{address}" {nick}: connected')
+        client.nick = nick
+
+        print_info("connected", client)
 
         with clients_lock:
             send(client, "Welcome! Type !exit to leave.")
         send_all(f"{nick.strip()} joined the chat.")
-    except:
-        with clients_lock:
-            clients.remove(client)
-            nicknames.remove(nick)
-        print(f'"{address}" {nick}: left')
+    except Exception as inst:
+        if nick is not None:
+            with clients_lock:
+                del clients[client.nick]
+            print_info("disconnected: " + inst, client)
+        return 1
 
-    return handle(client, address, nick)
+    return handle(client)
 
 
 def listener(server):
 
     while True:
-        thread = threading.Thread(target=join_routine, args=server.accept())
+        socket, address = server.accept()
+        client = new_client(socket)
+        client.address = address
+        thread = threading.Thread(target=join_routine, args=(client,))
         thread.start()
 
 
@@ -113,12 +134,13 @@ def start():
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-    print("Enter server address as ip:port")
-    print(f'Leave field empty for standard value: "{standard_address}"')
+    print_info("Enter server address as ip:port")
+    print_info(f'Leave field empty for standard value: "{standard_address}"')
     while True:
         try:
-            user_input = "".join(input("Server address: ")) or standard_address
-            address = "".join(user_input.split()).split(":")
+            user_input = input("Server address: ").strip() or standard_address
+            user_input = "".join(user_input.split())
+            address = user_input.split(":")
 
             if len(address) != 2:
                 raise Exception("Address should be written as ip:port")
@@ -132,9 +154,9 @@ def start():
             server.listen()
             break
         except Exception as inst:
-            print(inst)
+            print_info(inst)
 
-    print(f"Server started at {user_input}")
+    print_info(f"Server started at {user_input}")
     return listener(server)
 
 
